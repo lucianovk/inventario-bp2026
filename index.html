@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Inventário BP 2026</title>
+<meta name="theme-color" content="#0f3d33">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+/* Layout: uma coluna para uso com uma mão; câmera no topo, lista de pendentes embaixo. */
+:root{
+  --bg:#f2f5f3; --card:#ffffff; --ink:#13211c; --muted:#5b6b64; --line:#d5ddd9;
+  --brand:#0f3d33; --on-brand:#f2f5f3; --accent:#0b7a57;
+  --ok:#0b7a57; --ok-bg:#d9f2e6; --warn:#8a5a00; --warn-bg:#ffe9b8; --bad:#a3262b; --bad-bg:#fbdcdc;
+  --info:#1f4f8a; --info-bg:#dbe8fa;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0e1513; --card:#17211e; --ink:#e6eeea; --muted:#9aaba3; --line:#2a3833;
+  --brand:#0b2a23; --on-brand:#e6eeea; --accent:#3fcf9b;
+  --ok:#5fe0ae; --ok-bg:#12382b; --warn:#ffcf6b; --warn-bg:#3d2f08; --bad:#ff9a9a; --bad-bg:#421a1c;
+  --info:#9cc4ff; --info-bg:#162b47; color-scheme:dark;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{background:var(--brand);color:var(--on-brand);position:sticky;top:0;z-index:5;
+  padding:calc(10px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 10px max(16px,env(safe-area-inset-left,0px));
+  display:flex;align-items:center;gap:10px}
+header h1{font-size:17px;margin:0;flex:1;min-width:0;line-height:1.2}
+header small{display:block;font-weight:400;opacity:.8;font-size:13px}
+header button{background:transparent;color:inherit;border:1px solid rgba(255,255,255,.35);border-radius:8px;padding:8px 12px;font:inherit;font-size:14px}
+main{padding:16px max(16px,env(safe-area-inset-right,0px)) calc(24px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:6px 0 0}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent)}
+.total{display:flex;align-items:baseline;gap:8px}
+.total b{font-size:34px;font-variant-numeric:tabular-nums;line-height:1}
+.pick{display:flex;flex-direction:column;gap:8px}
+.pick button{display:flex;align-items:center;gap:12px;width:100%;text-align:left;background:var(--card);color:var(--ink);
+  border:1px solid var(--line);border-radius:12px;padding:14px;font:inherit}
+.pick button span{flex:1;min-width:0}
+.pick button small{display:block;color:var(--muted);font-size:13px}
+.count{font-variant-numeric:tabular-nums;font-weight:600;padding:3px 9px;border-radius:999px;background:var(--bg);border:1px solid var(--line);white-space:nowrap}
+.count.done{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.cam{position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:4/3;max-height:42vh;width:100%}
+.cam video{width:100%;height:100%;object-fit:cover;display:block}
+.cam .guide{position:absolute;left:6%;right:6%;top:50%;height:2px;background:#ff4d4d;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
+.cam .msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;padding:20px;font-size:15px}
+.cam .torch{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:8px;padding:8px 12px;font:inherit;font-size:14px}
+.flash{border-radius:12px;padding:12px 14px;font-weight:600;min-height:52px;display:flex;flex-direction:column;justify-content:center}
+.flash small{font-weight:400;font-size:13px}
+.flash.idle{background:var(--card);border:1px dashed var(--line);color:var(--muted);font-weight:400}
+.flash.ok{background:var(--ok-bg);color:var(--ok)} .flash.info{background:var(--info-bg);color:var(--info)}
+.flash.warn{background:var(--warn-bg);color:var(--warn)} .flash.bad{background:var(--bad-bg);color:var(--bad)}
+.doneBanner{background:var(--ok);color:#fff;border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+@media (prefers-color-scheme:dark){.doneBanner{color:#06241a}}
+.doneBanner strong{font-size:18px;line-height:1.25}
+.doneBanner button{align-self:flex-start;background:#fff;color:#0b3d2d;border:0;border-radius:8px;padding:10px 14px;font:inherit;font-weight:600}
+.manual{display:flex;gap:8px}
+.manual input{flex:1;min-width:0;font:inherit;font-family:var(--mono);padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:12px 16px;font:inherit;font-weight:600}
+@media (prefers-color-scheme:dark){.btn{color:#06241a}}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:500}
+.btn.danger{background:var(--bad-bg);color:var(--bad)}
+ul.items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+ul.items li{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;gap:10px;align-items:center}
+ul.items li>div{flex:1;min-width:0}
+ul.items li.found{border-color:transparent;background:var(--ok-bg)}
+ul.items .plq{font-family:var(--mono);font-weight:700;font-size:15px}
+ul.items .d{font-size:14px} ul.items .x{font-size:12.5px;color:var(--muted)}
+ul.items li.found .x{color:var(--ok)}
+ul.items button{background:transparent;border:1px solid var(--line);color:var(--muted);border-radius:8px;padding:6px 9px;font:inherit;font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+p.note{margin:0;color:var(--muted);font-size:14px}
+button:focus-visible,input:focus-visible{outline:3px solid var(--info);outline-offset:2px}
+</style>
+</head>
+<body>
+<header>
+  <button id="back" hidden aria-label="Voltar">‹ Voltar</button>
+  <h1 id="title">Inventário BP 2026</h1>
+  <button id="rep">Relatório</button>
+</header>
+<main id="app"></main>
+<script src="vendor/zxing.min.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
