@@ -1,5 +1,5 @@
 'use strict';
-const VERSAO = 'v5';
+const VERSAO = 'v6';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -104,6 +104,7 @@ function render() {
       <div class="row"><button class="btn" id="share">Compartilhar</button><button class="btn ghost" id="copy">Copiar texto</button>
         <button class="btn ghost" id="csv">Baixar CSV</button></div>
       <p class="note" id="repmsg"></p>
+      <h2>Na sala errada</h2><ul class="items">${ITENS.filter(i => isFound(i) && st.found[i.c].sala !== i.s).map(row).join('') || '<li><div>Nenhum bem achado fora da sala cadastrada.</div></li>'}</ul>
       <h2>Não encontrados</h2><ul class="items">${ITENS.filter(i => !isFound(i)).map(row).join('') || '<li><div>Nenhum. Todos os bens foram encontrados.</div></li>'}</ul>
       <h2>Encontrados</h2><ul class="items">${ITENS.filter(isFound).map(row).join('') || '<li><div>Nenhum bem lido ainda.</div></li>'}</ul>
       <h2>Plaquetas lidas que não são suas</h2><ul class="items">${st.extras.map(e => `<li><div><span class="plq">${esc(e.code)}</span><div class="x">lida em ${esc(e.sala)}</div></div></li>`).join('') || '<li><div>Nenhuma.</div></li>'}</ul>
@@ -125,19 +126,26 @@ function renderScan() {
       ${f ? `<div class="x">✓ achado em ${esc(f.sala)}${f.manual?' (digitado)':''}</div>` : ''}</div>
       ${f ? `<button data-undo="${it.c}">Desfazer</button>` : ''}</li>`; };
   const tipos = Object.keys(TIPOS).filter(t => alvo.some(i => i.t === t));
-  // resumo: um selo por tipo, com quantos faltam
-  const chips = tipos.map(t => { const l = alvo.filter(i => i.t === t), falta = l.filter(i => !isFound(i)).length;
-    return `<span class="chip ${falta ? '' : 'done'}">${falta ? (falta > 1 ? 'Faltam ' : 'Falta ') + falta : '✓'} · ${TIPOS[t][0]}</span>`; }).join('');
+  // um selo por tipo: o que falta nesta sala e o que falta nas outras (pode estar aqui, na sala errada)
+  const chips = Object.keys(TIPOS).map(t => {
+    const aqui = alvo.filter(i => i.t === t && !isFound(i)).length;
+    const fora = ITENS.filter(i => i.t === t && i.s !== view.sala && !isFound(i)).length;
+    if (!aqui && !fora) return `<span class="chip done">✓ ${TIPOS[t][0]} · todos encontrados, pode parar de ler</span>`;
+    if (!aqui) return `<span class="chip mid">${TIPOS[t][0]} · nenhum falta aqui · ${fora} em outras salas</span>`;
+    return `<span class="chip">${TIPOS[t][0]} · ${aqui > 1 ? 'faltam' : 'falta'} ${aqui} aqui${fora ? ' · ' + fora + ' em outras salas' : ''}</span>`; }).join('');
   const pend = tipos.filter(t => alvo.some(i => i.t === t && !isFound(i))).map(t => { const l = alvo.filter(i => i.t === t);
     return `<h3>${TIPOS[t][0]} — ${cnt(l)}</h3><ul class="items">${l.filter(i => !isFound(i)).map(li).join('')}</ul>`; }).join('');
   const achados = ITENS.filter(i => isFound(i) && (i.s === view.sala || st.found[i.c].sala === view.sala));
   const fora = ITENS.filter(i => i.s !== view.sala && !isFound(i));
+  const alheias = st.extras.filter(e => e.sala === view.sala);
   $('lists').innerHTML = `
     <h2>Falta encontrar em ${esc(view.sala)} — ${alvo.length - alvo.filter(isFound).length} de ${alvo.length}</h2>
     <div class="chips">${chips}</div>
     ${pend || '<p class="note">Nada pendente nesta sala.</p>'}
     <h2>Já encontrados nesta sala — ${achados.length}</h2>
     <ul class="items">${achados.map(li).join('') || '<li><div>Nenhum ainda.</div></li>'}</ul>
+    <details><summary>Plaquetas lidas aqui que não são suas — ${alheias.length}</summary><ul class="items">${alheias.map(e =>
+      `<li><div><span class="plq">${esc(e.code)}</span></div></li>`).join('') || '<li><div>Nenhuma.</div></li>'}</ul></details>
     ${fora.length ? `<details><summary>Cadastrados em outras salas, ainda não achados — ${fora.length}</summary><ul class="items">${fora.map(it =>
       `<li><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div><div class="x">${TIPOS[it.t][0]} · cadastro: ${esc(it.s)}</div></div></li>`).join('')}</ul></details>` : ''}`;
 }
@@ -158,7 +166,9 @@ function onRead(raw, manual) {
   cand = '';
   if (!it) {
     const code = d.slice(0,7) + (d.length > 7 ? '-' + d.slice(7) : '');
-    if (!st.extras.some(e => e.code === code)) { st.extras.push({ code, sala: view.sala, ts: now }); save(); }
+    const ja = st.extras.find(e => e.code === code && e.sala === view.sala);
+    if (ja) ja.n = (ja.n || 1) + 1; else st.extras.push({ code, raw: String(raw).slice(0, 40), sala: view.sala, ts: now, n: 1 });
+    save();
     flash = { k:'bad', t:'Não está na sua lista', s:'Plaqueta ' + code };
     buzz([40]); SOM.alheio();
   } else if (isFound(it)) {
@@ -178,7 +188,9 @@ function onRead(raw, manual) {
       flash = { k:'info', t:'É SEU — cole a etiqueta',
         s: it.d + ' · ' + plq(it.c) + ' — o cadastro diz ' + it.s + '. Registrado como achado em ' + view.sala + '.' };
     }
-    if (it.s === view.sala && grupo.every(isFound)) setTimeout(SOM.grupo, 800);
+    const todoTipo = ITENS.filter(i => i.t === it.t);
+    if (todoTipo.every(isFound)) flash.s += ' ' + TIPOS[it.t][1] + ' ' + todoTipo.length + ' ' + nome + ' da sua lista foram encontrados: pode parar de ler ' + nome + '.';
+    if (todoTipo.every(isFound) || (it.s === view.sala && grupo.every(isFound))) setTimeout(SOM.grupo, 800);
     buzz([200,80,200]); SOM.meu();
   }
   renderScan();
@@ -314,7 +326,11 @@ document.addEventListener('visibilitychange', () => {
 // ---------- Relatório ----------
 function reportText() {
   const f = ITENS.filter(isFound), nf = ITENS.filter(i => !isFound(i));
-  const L = ['Inventário BP 2026 — conferência', `Encontrados: ${f.length} de ${ITENS.length}`, '', 'ENCONTRADOS'];
+  const L = ['Inventário BP 2026 — conferência', `Encontrados: ${f.length} de ${ITENS.length}`, '', 'NA SALA ERRADA'];
+  const err = f.filter(i => st.found[i.c].sala !== i.s);
+  err.forEach(i => L.push(`${i.n}. ${plq(i.c)} ${i.d} — achado em ${st.found[i.c].sala}, cadastro diz ${i.s}`));
+  if (!err.length) L.push('nenhum');
+  L.push('', 'ENCONTRADOS');
   f.forEach(i => { const s = st.found[i.c].sala; L.push(`${i.n}. ${plq(i.c)} ${i.d} — ${s === i.s ? 'na sala cadastrada ' + i.s : 'achado em ' + s + ' (cadastro: ' + i.s + ')'}`); });
   L.push('', 'NÃO ENCONTRADOS'); nf.forEach(i => L.push(`${i.n}. ${plq(i.c)} ${i.d} — cadastro: ${i.s}`));
   if (st.extras.length) { L.push('', 'PLAQUETAS LIDAS FORA DA LISTA'); st.extras.forEach(e => L.push(`${e.code} — lida em ${e.sala}`)); }
