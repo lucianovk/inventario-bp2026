@@ -95,6 +95,7 @@ function render() {
       <div class="cam"><video id="video" playsinline muted></video><div class="guide"></div>
         <div class="msg" id="cammsg">Abrindo a câmera…</div>
         <button class="torch" id="torch" hidden>Lanterna</button></div>
+      <p class="note" id="diag"></p>
       <div id="flash"></div><div id="banner"></div>
       <form class="manual" id="manual"><input id="code" inputmode="numeric" autocomplete="off" placeholder="Ou digite a plaqueta (7 dígitos)" aria-label="Número da plaqueta">
         <button class="btn" type="submit">OK</button></form>
@@ -207,8 +208,8 @@ async function startCam() {
       : 'Não consegui abrir a câmera. Digite a plaqueta abaixo.'; return; }
   const v = $('video');
   if (!v || view.name !== 'scan') { stopCam(); return; }
-  v.srcObject = stream; try { await v.play(); } catch (e) {}
-  msg.hidden = true;
+  v.srcObject = stream; msg.hidden = true;
+  v.play().catch(() => {});
   const track = stream.getVideoTracks()[0];
   try { const caps = track.getCapabilities ? track.getCapabilities() : {};
     if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced:[{ focusMode:'continuous' }] }).catch(()=>{});
@@ -225,6 +226,8 @@ async function startCam() {
     hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93, Z.BarcodeFormat.ITF, Z.BarcodeFormat.CODABAR, Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX]);
     zx = { Z, reader: new Z.MultiFormatReader(), hints }; canvas = document.createElement('canvas');
   }
+  const diag = $('diag'), set = track.getSettings ? track.getSettings() : {};
+  if (diag) diag.textContent = 'Leitor: ' + (detector ? 'nativo do Android' : zx ? 'ZXing' : 'nenhum') + ' · câmera ' + (set.width || '?') + '×' + (set.height || '?') + ' · v2';
   if (!detector && !zx) { msg.hidden = false; msg.textContent = 'Leitor de código de barras indisponível neste navegador. Digite a plaqueta abaixo.'; return; }
   tick();
 }
