@@ -94,7 +94,7 @@ function render() {
     app.innerHTML = `
       <div class="cam"><video id="video" playsinline muted></video><div class="guide"></div>
         <div class="msg" id="cammsg">Abrindo a câmera…</div>
-        <button class="torch" id="torch" hidden>Lanterna</button></div>
+        <div class="camctl"><button id="lens" hidden>Lente</button><button id="zoom" hidden>Zoom</button><button id="torch" hidden>Lanterna</button></div></div>
       <p class="note" id="diag"></p>
       <div id="flash"></div><div id="banner"></div>
       <form class="manual" id="manual"><input id="code" inputmode="numeric" autocomplete="off" placeholder="Ou digite a plaqueta (7 dígitos)" aria-label="Número da plaqueta">
@@ -122,7 +122,7 @@ function render() {
 function renderScan() {
   const alvo = ITENS.filter(i => i.s === view.sala && i.t === view.tipo);
   const nome = TIPOS[view.tipo][0].toLowerCase();
-  const fl = flash || { k:'idle', t: alvo.length ? 'Leitura contínua: aponte a linha vermelha para o código da plaqueta. Deixe o volume de mídia alto.' : 'Nenhum bem deste tipo cadastrado nesta sala. Leia o que encontrar.', s:'' };
+  const fl = flash || { k:'idle', t: alvo.length ? 'Leitura contínua: segure a 15–20 cm, com a linha vermelha cruzando todas as barras. Volume de mídia alto.' : 'Nenhum bem deste tipo cadastrado nesta sala. Leia o que encontrar.', s:'' };
   $('flash').innerHTML = `<div class="flash ${fl.k}" role="status">${esc(fl.t)}${fl.s?`<small>${esc(fl.s)}</small>`:''}</div>`;
   const done = alvo.length > 0 && alvo.every(isFound);
   const resto = ITENS.filter(i => i.t === view.tipo && i.s !== view.sala && !isFound(i));
@@ -196,14 +196,22 @@ const SOM = {
 
 // ---------- Câmera ----------
 let stream = null, timer = null, detector = null, zx = null, canvas = null;
+let camIds = [], camIdx = -1, zoomLv = 2, frames = 0, lastRaw = '', lastErr = '', camInfo = '';
 const FORMATOS = ['code_128','code_39','code_93','itf','codabar','ean_13','qr_code','data_matrix'];
+function showDiag() {
+  const d = $('diag'); if (!d) return;
+  d.textContent = 'v3 · ' + camInfo + ' · leitor ' + (detector ? 'nativo' : '') + (detector && zx ? '+' : '') + (zx ? 'ZXing' : '') +
+    ' · quadros ' + frames + (lastRaw ? ' · último lido: ' + lastRaw : ' · nada lido ainda') + (lastErr ? ' · erro: ' + lastErr : '');
+}
 async function startCam() {
   const msg = $('cammsg');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     msg.textContent = 'Câmera indisponível. O app precisa ser aberto por HTTPS. Use o campo abaixo para digitar a plaqueta.'; return; }
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio:false, video:{ facingMode:{ ideal:'environment' }, width:{ ideal:1920 }, height:{ ideal:1080 } } });
-  } catch (e) {
+  const video = { width:{ ideal:1920 }, height:{ ideal:1080 } };
+  if (camIdx >= 0 && camIds[camIdx]) video.deviceId = { exact: camIds[camIdx] }; else video.facingMode = { ideal:'environment' };
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio:false, video }); }
+  catch (e) {
+    msg.hidden = false;
     msg.textContent = e && e.name === 'NotAllowedError' ? 'Permita o uso da câmera nas configurações do navegador, ou digite a plaqueta abaixo.'
       : 'Não consegui abrir a câmera. Digite a plaqueta abaixo.'; return; }
   const v = $('video');
@@ -211,44 +219,72 @@ async function startCam() {
   v.srcObject = stream; msg.hidden = true;
   v.play().catch(() => {});
   const track = stream.getVideoTracks()[0];
-  try { const caps = track.getCapabilities ? track.getCapabilities() : {};
-    if (caps.focusMode && caps.focusMode.includes('continuous')) track.applyConstraints({ advanced:[{ focusMode:'continuous' }] }).catch(()=>{});
-    if (caps.torch) { const b = $('torch'); b.hidden = false; let on = false;
-      b.onclick = () => { on = !on; track.applyConstraints({ advanced:[{ torch:on }] }).catch(()=>{}); }; }
+  let caps = {};
+  try { caps = track.getCapabilities ? track.getCapabilities() : {}; } catch (e) {}
+  try { if (caps.focusMode && caps.focusMode.includes('continuous')) await track.applyConstraints({ advanced:[{ focusMode:'continuous' }] }); } catch (e) {}
+  // zoom: deixa segurar o celular mais longe (foco melhor) com o código grande na imagem
+  const bz = $('zoom');
+  const setZoom = async () => { try { const z = Math.min(caps.zoom.max, Math.max(caps.zoom.min, zoomLv));
+    await track.applyConstraints({ advanced:[{ zoom:z }] }); bz.textContent = 'Zoom ' + zoomLv + '×'; } catch (e) {} };
+  if (caps.zoom && caps.zoom.max > 1) { bz.hidden = false; setZoom();
+    bz.onclick = () => { zoomLv = zoomLv >= 4 || zoomLv >= caps.zoom.max ? 1 : zoomLv + 1; setZoom(); }; }
+  if (caps.torch) { const b = $('torch'); b.hidden = false; let on = false;
+    b.onclick = () => { on = !on; track.applyConstraints({ advanced:[{ torch:on }] }).catch(()=>{}); }; }
+  // lista de câmeras traseiras, para poder trocar de lente
+  try { const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const back = devs.filter(d => /back|traseira|environment|rear/i.test(d.label));
+    camIds = (back.length ? back : devs).map(d => d.deviceId);
+    const cur = track.getSettings ? track.getSettings().deviceId : null;
+    if (camIdx < 0) camIdx = Math.max(0, camIds.indexOf(cur));
+    const bl = $('lens');
+    if (camIds.length > 1) { bl.hidden = false; bl.textContent = 'Lente ' + (camIdx + 1) + '/' + camIds.length;
+      bl.onclick = () => { camIdx = (camIdx + 1) % camIds.length; stopCam(); startCam(); }; }
   } catch (e) {}
+  const set = track.getSettings ? track.getSettings() : {};
+  camInfo = 'câmera ' + (set.width || '?') + '×' + (set.height || '?');
   if (!detector && 'BarcodeDetector' in window) {
     try { const sup = await BarcodeDetector.getSupportedFormats(); const f = FORMATOS.filter(x => sup.includes(x));
-      if (f.length) detector = new BarcodeDetector({ formats:f }); } catch (e) {}
+      if (f.length) detector = new BarcodeDetector({ formats:f }); } catch (e) { lastErr = 'nativo: ' + (e.message || e.name); }
   }
-  if (!detector && !zx && window.ZXing) {
+  if (!zx && window.ZXing) {
     const Z = window.ZXing, hints = new Map();
     hints.set(Z.DecodeHintType.TRY_HARDER, true);
-    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93, Z.BarcodeFormat.ITF, Z.BarcodeFormat.CODABAR, Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.QR_CODE, Z.BarcodeFormat.DATA_MATRIX]);
-    zx = { Z, reader: new Z.MultiFormatReader(), hints }; canvas = document.createElement('canvas');
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93, Z.BarcodeFormat.ITF, Z.BarcodeFormat.CODABAR, Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.QR_CODE]);
+    zx = { Z, reader: new Z.MultiFormatReader(), hints };
   }
-  const diag = $('diag'), set = track.getSettings ? track.getSettings() : {};
-  if (diag) diag.textContent = 'Leitor: ' + (detector ? 'nativo do Android' : zx ? 'ZXing' : 'nenhum') + ' · câmera ' + (set.width || '?') + '×' + (set.height || '?') + ' · v2';
+  canvas = canvas || document.createElement('canvas');
+  showDiag();
   if (!detector && !zx) { msg.hidden = false; msg.textContent = 'Leitor de código de barras indisponível neste navegador. Digite a plaqueta abaixo.'; return; }
-  tick();
+  clearTimeout(timer); tick();
 }
+function got(text) { lastRaw = String(text).slice(0, 24); onRead(text, false); }
 async function tick() {
   const v = $('video');
   if (!stream || !v) return;
   if (v.readyState >= 2 && v.videoWidth) {
-    try {
-      if (detector) { (await detector.detect(v)).forEach(b => onRead(b.rawValue, false)); }
-      else {
-        // faixa central do quadro, onde fica a linha-guia
-        const sw = v.videoWidth, sh = Math.round(v.videoHeight * .4), sy = Math.round((v.videoHeight - sh) / 2);
-        const k = Math.min(1, 1280 / sw); canvas.width = Math.round(sw * k); canvas.height = Math.round(sh * k);
-        canvas.getContext('2d', { willReadFrequently:true }).drawImage(v, 0, sy, sw, sh, 0, 0, canvas.width, canvas.height);
-        const { Z, reader, hints } = zx;
-        const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(new Z.HTMLCanvasElementLuminanceSource(canvas)));
-        try { onRead(reader.decode(bmp, hints).getText(), false); } catch (e) { /* nada lido neste quadro */ }
-      }
-    } catch (e) {}
+    frames++;
+    // recorta a faixa central (onde está a linha vermelha) e amplia: o código fica grande para os dois leitores
+    const vw = v.videoWidth, vh = v.videoHeight;
+    const sw = Math.round(vw * .9), sh = Math.round(Math.min(vh * .34, sw * .5)), sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
+    const k = 1600 / sw; canvas.width = 1600; canvas.height = Math.round(sh * k);
+    const ctx = canvas.getContext('2d', { willReadFrequently:true });
+    ctx.imageSmoothingEnabled = true; ctx.drawImage(v, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    let ok = false;
+    if (detector) {
+      try { let r = await detector.detect(canvas); if (!r.length) r = await detector.detect(v);
+        r.forEach(b => { ok = true; got(b.rawValue); }); } catch (e) { lastErr = 'nativo: ' + (e.message || e.name); }
+    }
+    if (!ok && zx) {
+      const { Z, reader, hints } = zx;
+      try { const src = new Z.HTMLCanvasElementLuminanceSource(canvas);
+        for (const B of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
+          try { got(reader.decode(new Z.BinaryBitmap(new B(src)), hints).getText()); break; } catch (e) { /* nada neste quadro */ }
+        }
+      } catch (e) { lastErr = 'ZXing: ' + (e.message || e.name); }
+    }
+    if (frames % 5 === 0) showDiag();
   }
-  timer = setTimeout(tick, detector ? 120 : 180);
+  timer = setTimeout(tick, 100);
 }
 function stopCam() {
   clearTimeout(timer); timer = null;
