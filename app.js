@@ -1,5 +1,5 @@
 'use strict';
-const VERSAO = 'v4';
+const VERSAO = 'v5';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -81,17 +81,8 @@ function render() {
       <h2>Salas</h2>
       <div class="pick">${SALAS.map(s => { const l = ITENS.filter(i => i.s === s);
         return `<button data-sala="${esc(s)}"><span>${esc(s)}<small>${l.length} ${l.length>1?'bens cadastrados':'bem cadastrado'} aqui</small></span>${badge(l)}</button>`; }).join('')}</div>`;
-  } else if (view.name === 'sala') {
-    $('title').innerHTML = `${esc(view.sala)}<small>Escolha o tipo de bem</small>`;
-    const here = Object.keys(TIPOS).filter(t => ITENS.some(i => i.s === view.sala && i.t === t));
-    const other = Object.keys(TIPOS).filter(t => !here.includes(t));
-    const btn = t => { const l = ITENS.filter(i => i.s === view.sala && i.t === t);
-      return `<button data-tipo="${t}"><span>${TIPOS[t][0]}${l.length?'':'<small>Nenhum cadastrado nesta sala</small>'}</span>${l.length?badge(l):''}</button>`; };
-    app.innerHTML = `<h2>Cadastrados nesta sala</h2><div class="pick">${here.map(btn).join('')}</div>
-      <h2>Outros tipos</h2><p class="note">Use se achar aqui um bem que está cadastrado em outra sala.</p>
-      <div class="pick">${other.map(btn).join('')}</div>`;
   } else if (view.name === 'scan') {
-    $('title').innerHTML = `${TIPOS[view.tipo][0]}<small>${esc(view.sala)}</small>`;
+    $('title').innerHTML = `${esc(view.sala)}<small>Leia todas as plaquetas da sala</small>`;
     app.innerHTML = `
       <div class="cam"><video id="video" playsinline muted></video><div class="guide"></div>
         <div class="msg" id="cammsg">Abrindo a câmera…</div>
@@ -121,25 +112,34 @@ function render() {
 }
 
 function renderScan() {
-  const alvo = ITENS.filter(i => i.s === view.sala && i.t === view.tipo);
-  const nome = TIPOS[view.tipo][0].toLowerCase();
-  const fl = flash || { k:'idle', t: alvo.length ? 'Leitura contínua: encaixe o código de barras inteiro dentro da moldura vermelha, ocupando quase toda a largura dela.' : 'Nenhum bem deste tipo cadastrado nesta sala. Leia o que encontrar.', s:'' };
+  const alvo = ITENS.filter(i => i.s === view.sala);
+  const fl = flash || { k:'idle', t:'Leitura contínua: encaixe o código de barras inteiro dentro da moldura vermelha, ocupando quase toda a largura dela.', s:'' };
   $('flash').innerHTML = `<div class="flash ${fl.k}" role="status">${esc(fl.t)}${fl.s?`<small>${esc(fl.s)}</small>`:''}</div>`;
-  const done = alvo.length > 0 && alvo.every(isFound);
-  const resto = ITENS.filter(i => i.t === view.tipo && i.s !== view.sala && !isFound(i));
-  $('banner').innerHTML = done ? `<div class="doneBanner"><strong>${TIPOS[view.tipo][1]} ${alvo.length} ${nome} cadastrados em ${esc(view.sala)} foram encontrados.</strong>
-    <button id="next">Escolher o próximo tipo</button></div>` : '';
-  if (done && !bannerShown) { bannerShown = true; buzz([120,80,120,80,300]); setTimeout(SOM.grupo, 700); }
+  const done = alvo.every(isFound);
+  $('banner').innerHTML = done ? `<div class="doneBanner"><strong>Todos os ${alvo.length} bens cadastrados em ${esc(view.sala)} foram encontrados.</strong>
+    <button id="next">Escolher outra sala</button></div>` : '';
+  if (done && !bannerShown) { bannerShown = true; buzz([120,80,120,80,300]); }
   if (!done) bannerShown = false;
   const li = it => { const f = st.found[it.c];
     return `<li class="${f?'found':''}"><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div>
       ${f ? `<div class="x">✓ achado em ${esc(f.sala)}${f.manual?' (digitado)':''}</div>` : ''}</div>
       ${f ? `<button data-undo="${it.c}">Desfazer</button>` : ''}</li>`; };
+  const tipos = Object.keys(TIPOS).filter(t => alvo.some(i => i.t === t));
+  // resumo: um selo por tipo, com quantos faltam
+  const chips = tipos.map(t => { const l = alvo.filter(i => i.t === t), falta = l.filter(i => !isFound(i)).length;
+    return `<span class="chip ${falta ? '' : 'done'}">${falta ? (falta > 1 ? 'Faltam ' : 'Falta ') + falta : '✓'} · ${TIPOS[t][0]}</span>`; }).join('');
+  const pend = tipos.filter(t => alvo.some(i => i.t === t && !isFound(i))).map(t => { const l = alvo.filter(i => i.t === t);
+    return `<h3>${TIPOS[t][0]} — ${cnt(l)}</h3><ul class="items">${l.filter(i => !isFound(i)).map(li).join('')}</ul>`; }).join('');
+  const achados = ITENS.filter(i => isFound(i) && (i.s === view.sala || st.found[i.c].sala === view.sala));
+  const fora = ITENS.filter(i => i.s !== view.sala && !isFound(i));
   $('lists').innerHTML = `
-    <h2>${TIPOS[view.tipo][0]} em ${esc(view.sala)} — ${alvo.length ? cnt(alvo) : 'nenhum'}</h2>
-    <ul class="items">${alvo.filter(i => !isFound(i)).concat(alvo.filter(isFound)).map(li).join('')}</ul>
-    ${resto.length ? `<h2>Cadastrados em outras salas, ainda não achados</h2><ul class="items">${resto.map(it =>
-      `<li><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div><div class="x">cadastro: ${esc(it.s)}</div></div></li>`).join('')}</ul>` : ''}`;
+    <h2>Falta encontrar em ${esc(view.sala)} — ${alvo.length - alvo.filter(isFound).length} de ${alvo.length}</h2>
+    <div class="chips">${chips}</div>
+    ${pend || '<p class="note">Nada pendente nesta sala.</p>'}
+    <h2>Já encontrados nesta sala — ${achados.length}</h2>
+    <ul class="items">${achados.map(li).join('') || '<li><div>Nenhum ainda.</div></li>'}</ul>
+    ${fora.length ? `<details><summary>Cadastrados em outras salas, ainda não achados — ${fora.length}</summary><ul class="items">${fora.map(it =>
+      `<li><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div><div class="x">${TIPOS[it.t][0]} · cadastro: ${esc(it.s)}</div></div></li>`).join('')}</ul></details>` : ''}`;
 }
 
 // ---------- Leitura ----------
@@ -166,9 +166,19 @@ function onRead(raw, manual) {
     buzz([40,60,40]); SOM.repetido();
   } else {
     st.found[it.c] = { sala: view.sala, ts: now, manual: !!manual }; save();
-    if (it.s === view.sala && it.t === view.tipo) { flash = { k:'ok', t:'É SEU — cole a etiqueta', s: it.d + ' · ' + plq(it.c) }; }
-    else { flash = { k:'info', t:'É SEU — cole a etiqueta',
-      s: it.d + ' · ' + plq(it.c) + ' — outro grupo: ' + TIPOS[it.t][0] + ', cadastro em ' + it.s + '. Registrado como achado em ' + view.sala + '.' }; }
+    const grupo = ITENS.filter(i => i.s === it.s && i.t === it.t), sala = ITENS.filter(i => i.s === view.sala);
+    const nome = TIPOS[it.t][0].toLowerCase();
+    let extra = '';
+    if (it.s === view.sala) {
+      if (sala.every(isFound)) extra = ' Sala completa!';
+      else if (grupo.every(isFound)) extra = ' ' + TIPOS[it.t][1] + ' ' + nome + ' desta sala foram encontrados.';
+      else { const n = grupo.filter(i => !isFound(i)).length; extra = (n > 1 ? ' Faltam ' : ' Falta ') + n + ' em ' + nome + '.'; }
+      flash = { k:'ok', t:'É SEU — cole a etiqueta', s: it.d + ' · ' + plq(it.c) + '.' + extra };
+    } else {
+      flash = { k:'info', t:'É SEU — cole a etiqueta',
+        s: it.d + ' · ' + plq(it.c) + ' — o cadastro diz ' + it.s + '. Registrado como achado em ' + view.sala + '.' };
+    }
+    if (it.s === view.sala && grupo.every(isFound)) setTimeout(SOM.grupo, 800);
     buzz([200,80,200]); SOM.meu();
   }
   renderScan();
@@ -324,10 +334,10 @@ let resetArmed = false;
 document.addEventListener('click', async e => {
   audioOn();
   const b = e.target.closest('button'); if (!b) return;
-  if (b.id === 'back') return go(view.name === 'scan' ? 'sala' : 'home');
+  if (b.id === 'back') return go('home');
   if (b.id === 'rep') return go('report');
-  if (b.id === 'next') return go('sala');
-  if (b.dataset.sala) return go('sala', b.dataset.sala);
+  if (b.id === 'next') return go('home');
+  if (b.dataset.sala) return go('scan', b.dataset.sala);
   if (b.dataset.tipo) return go('scan', null, b.dataset.tipo);
   if (b.dataset.undo) { delete st.found[b.dataset.undo]; save(); flash = { k:'warn', t:'Leitura desfeita', s: plq(b.dataset.undo) }; return renderScan(); }
   const say = t => { const m = $('repmsg'); if (m) m.textContent = t; };
