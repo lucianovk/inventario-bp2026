@@ -1,4 +1,5 @@
 'use strict';
+const VERSAO = 'v4';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -72,7 +73,7 @@ function render() {
   $('rep').hidden = view.name === 'report';
   const app = $('app');
   if (view.name === 'home') {
-    $('title').innerHTML = 'Inventário BP 2026<small>Escolha a sala onde você está</small>';
+    $('title').innerHTML = 'Inventário BP 2026<small>Escolha a sala onde você está · ' + VERSAO + '</small>';
     const f = ITENS.filter(isFound).length;
     app.innerHTML = `
       <div class="total"><b>${f}</b><span>de ${ITENS.length} bens encontrados</span></div>
@@ -122,7 +123,7 @@ function render() {
 function renderScan() {
   const alvo = ITENS.filter(i => i.s === view.sala && i.t === view.tipo);
   const nome = TIPOS[view.tipo][0].toLowerCase();
-  const fl = flash || { k:'idle', t: alvo.length ? 'Leitura contínua: segure a 15–20 cm, com a linha vermelha cruzando todas as barras. Volume de mídia alto.' : 'Nenhum bem deste tipo cadastrado nesta sala. Leia o que encontrar.', s:'' };
+  const fl = flash || { k:'idle', t: alvo.length ? 'Leitura contínua: encaixe o código de barras inteiro dentro da moldura vermelha, ocupando quase toda a largura dela.' : 'Nenhum bem deste tipo cadastrado nesta sala. Leia o que encontrar.', s:'' };
   $('flash').innerHTML = `<div class="flash ${fl.k}" role="status">${esc(fl.t)}${fl.s?`<small>${esc(fl.s)}</small>`:''}</div>`;
   const done = alvo.length > 0 && alvo.every(isFound);
   const resto = ITENS.filter(i => i.t === view.tipo && i.s !== view.sala && !isFound(i));
@@ -200,14 +201,14 @@ let camIds = [], camIdx = -1, zoomLv = 2, frames = 0, lastRaw = '', lastErr = ''
 const FORMATOS = ['code_128','code_39','code_93','itf','codabar','ean_13','qr_code','data_matrix'];
 function showDiag() {
   const d = $('diag'); if (!d) return;
-  d.textContent = 'v3 · ' + camInfo + ' · leitor ' + (detector ? 'nativo' : '') + (detector && zx ? '+' : '') + (zx ? 'ZXing' : '') +
+  d.textContent = VERSAO + ' · ' + camInfo + ' · leitor ' + (detector ? 'nativo' : '') + (detector && zx ? '+' : '') + (zx ? 'ZXing' : '') +
     ' · quadros ' + frames + (lastRaw ? ' · último lido: ' + lastRaw : ' · nada lido ainda') + (lastErr ? ' · erro: ' + lastErr : '');
 }
 async function startCam() {
   const msg = $('cammsg');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     msg.textContent = 'Câmera indisponível. O app precisa ser aberto por HTTPS. Use o campo abaixo para digitar a plaqueta.'; return; }
-  const video = { width:{ ideal:1920 }, height:{ ideal:1080 } };
+  const video = { width:{ ideal:3840 }, height:{ ideal:2160 } };
   if (camIdx >= 0 && camIds[camIdx]) video.deviceId = { exact: camIds[camIdx] }; else video.facingMode = { ideal:'environment' };
   try { stream = await navigator.mediaDevices.getUserMedia({ audio:false, video }); }
   catch (e) {
@@ -258,33 +259,39 @@ async function startCam() {
   clearTimeout(timer); tick();
 }
 function got(text) { lastRaw = String(text).slice(0, 24); onRead(text, false); }
+// Três recortes do quadro, um por vez: moldura (60% da largura), quadro largo (90%) e miolo ampliado (35%).
+// O ZXing só decodifica quando o código ocupa cerca de metade ou mais da largura analisada.
+const PASSES = [{ f:.6, up:1 }, { f:.9, up:1 }, { f:.35, up:2 }];
+function recorte(src, vw, vh, p, cv) {
+  const sw = Math.round(vw * p.f), sh = Math.round(Math.min(vh * .5, sw * .45)), sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
+  const w = Math.max(1000, Math.min(2000, sw * p.up));
+  cv.width = w; cv.height = Math.round(sh * w / sw);
+  const ctx = cv.getContext('2d', { willReadFrequently:true });
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, cv.width, cv.height);
+  return cv;
+}
+function lerZXing(cv) {
+  const { Z, reader, hints } = zx, src = new Z.HTMLCanvasElementLuminanceSource(cv);
+  for (const B of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
+    try { return reader.decode(new Z.BinaryBitmap(new B(src)), hints).getText(); } catch (e) { /* nada neste recorte */ }
+  }
+  return null;
+}
 async function tick() {
   const v = $('video');
   if (!stream || !v) return;
   if (v.readyState >= 2 && v.videoWidth) {
+    const cv = recorte(v, v.videoWidth, v.videoHeight, PASSES[frames % PASSES.length], canvas);
     frames++;
-    // recorta a faixa central (onde está a linha vermelha) e amplia: o código fica grande para os dois leitores
-    const vw = v.videoWidth, vh = v.videoHeight;
-    const sw = Math.round(vw * .9), sh = Math.round(Math.min(vh * .34, sw * .5)), sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
-    const k = 1600 / sw; canvas.width = 1600; canvas.height = Math.round(sh * k);
-    const ctx = canvas.getContext('2d', { willReadFrequently:true });
-    ctx.imageSmoothingEnabled = true; ctx.drawImage(v, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     let ok = false;
     if (detector) {
-      try { let r = await detector.detect(canvas); if (!r.length) r = await detector.detect(v);
-        r.forEach(b => { ok = true; got(b.rawValue); }); } catch (e) { lastErr = 'nativo: ' + (e.message || e.name); }
+      try { (await detector.detect(cv)).forEach(b => { ok = true; got(b.rawValue); }); } catch (e) { lastErr = 'nativo: ' + (e.message || e.name); }
     }
-    if (!ok && zx) {
-      const { Z, reader, hints } = zx;
-      try { const src = new Z.HTMLCanvasElementLuminanceSource(canvas);
-        for (const B of [Z.HybridBinarizer, Z.GlobalHistogramBinarizer]) {
-          try { got(reader.decode(new Z.BinaryBitmap(new B(src)), hints).getText()); break; } catch (e) { /* nada neste quadro */ }
-        }
-      } catch (e) { lastErr = 'ZXing: ' + (e.message || e.name); }
-    }
+    if (!ok && zx) { try { const t = lerZXing(cv); if (t) got(t); } catch (e) { lastErr = 'ZXing: ' + (e.message || e.name); } }
     if (frames % 5 === 0) showDiag();
   }
-  timer = setTimeout(tick, 100);
+  timer = setTimeout(tick, 60);
 }
 function stopCam() {
   clearTimeout(timer); timer = null;

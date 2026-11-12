@@ -1,5 +1,5 @@
 // Guarda o app no aparelho para funcionar sem rede. Troque a versão ao publicar mudanças.
-const CACHE = 'inventario-bp2026-v3';
+const CACHE = 'inventario-bp2026-v4';
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'vendor/zxing.min.js'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
@@ -7,7 +7,7 @@ self.addEventListener('activate', e => e.waitUntil(
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   // rede primeiro (para receber atualizações); sem rede, usa a cópia guardada
-  e.respondWith(fetch(e.request).then(r => {
+  e.respondWith(fetch(e.request.url, { cache: 'no-cache' }).then(r => {
     if (r.ok) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
     return r;
   }).catch(() => caches.match(e.request, { ignoreSearch: true })));
