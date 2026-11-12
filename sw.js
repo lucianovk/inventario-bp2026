@@ -1,6 +1,6 @@
 // Guarda o app no aparelho para funcionar sem rede. Troque a versão ao publicar mudanças.
-const CACHE = 'inventario-bp2026-v6';
-const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'vendor/zxing.min.js'];
+const CACHE = 'inventario-bp2026-v7';
+const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'vendor/zxing.min.js', 'vendor/zxing-wasm.js', 'vendor/zxing_reader.wasm'];
 self.addEventListener('install', e => e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())));
 self.addEventListener('activate', e => e.waitUntil(
   caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())));

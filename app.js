@@ -1,5 +1,5 @@
 'use strict';
-const VERSAO = 'v6';
+const VERSAO = 'v7';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -48,8 +48,9 @@ const plq = c => c + '-000';
 
 // ---------- Estado (fica só neste aparelho) ----------
 const KEY = 'inventario-bp2026-v1';
-let st = { found:{}, extras:[] };
+let st = { found:{}, extras:[], leitor:'auto' };
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.found) st = s; } catch (e) {}
+const LEITORES = { auto:'Automático (nativo, depois ZXing C++)', nativo:'Nativo do Android', wasm:'ZXing C++ (WebAssembly)', js:'ZXing JavaScript' };
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
 
 let view = { name:'home', sala:null, tipo:null };
@@ -87,6 +88,7 @@ function render() {
       <div class="cam"><video id="video" playsinline muted></video><div class="guide"></div>
         <div class="msg" id="cammsg">Abrindo a câmera…</div>
         <div class="camctl"><button id="lens" hidden>Lente</button><button id="zoom" hidden>Zoom</button><button id="torch" hidden>Lanterna</button></div></div>
+      <label class="leitor">Leitor <select id="leitor">${Object.entries(LEITORES).map(([k, v]) => `<option value="${k}" ${(st.leitor || 'auto') === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <p class="note" id="diag"></p>
       <div id="flash"></div><div id="banner"></div>
       <form class="manual" id="manual"><input id="code" inputmode="numeric" autocomplete="off" placeholder="Ou digite a plaqueta (7 dígitos)" aria-label="Número da plaqueta">
@@ -219,11 +221,11 @@ const SOM = {
 
 // ---------- Câmera ----------
 let stream = null, timer = null, detector = null, zx = null, canvas = null;
-let camIds = [], camIdx = -1, zoomLv = 2, frames = 0, lastRaw = '', lastErr = '', camInfo = '';
+let camIds = [], camIdx = -1, zoomLv = 2, frames = 0, lastRaw = '', lastErr = '', camInfo = '', lastBy = '', wasmOk = false;
 const FORMATOS = ['code_128','code_39','code_93','itf','codabar','ean_13','qr_code','data_matrix'];
 function showDiag() {
   const d = $('diag'); if (!d) return;
-  d.textContent = VERSAO + ' · ' + camInfo + ' · leitor ' + (detector ? 'nativo' : '') + (detector && zx ? '+' : '') + (zx ? 'ZXing' : '') +
+  d.textContent = VERSAO + ' · ' + camInfo + ' · disponíveis: ' + [detector && 'nativo', wasmOk && 'C++', zx && 'JS'].filter(Boolean).join(', ') + ' · lido por: ' + (lastBy || '—') +
     ' · quadros ' + frames + (lastRaw ? ' · último lido: ' + lastRaw : ' · nada lido ainda') + (lastErr ? ' · erro: ' + lastErr : '');
 }
 async function startCam() {
@@ -275,12 +277,15 @@ async function startCam() {
     hints.set(Z.DecodeHintType.POSSIBLE_FORMATS, [Z.BarcodeFormat.CODE_128, Z.BarcodeFormat.CODE_39, Z.BarcodeFormat.CODE_93, Z.BarcodeFormat.ITF, Z.BarcodeFormat.CODABAR, Z.BarcodeFormat.EAN_13, Z.BarcodeFormat.QR_CODE]);
     zx = { Z, reader: new Z.MultiFormatReader(), hints };
   }
+  if (!wasmOk && window.ZXingWASM) {
+    try { ZXingWASM.prepareZXingModule({ overrides:{ locateFile:(path) => 'vendor/' + path } }); wasmOk = true; } catch (e) { lastErr = 'C++: ' + (e.message || e.name); }
+  }
   canvas = canvas || document.createElement('canvas');
   showDiag();
-  if (!detector && !zx) { msg.hidden = false; msg.textContent = 'Leitor de código de barras indisponível neste navegador. Digite a plaqueta abaixo.'; return; }
+  if (!detector && !zx && !wasmOk) { msg.hidden = false; msg.textContent = 'Leitor de código de barras indisponível neste navegador. Digite a plaqueta abaixo.'; return; }
   clearTimeout(timer); tick();
 }
-function got(text) { lastRaw = String(text).slice(0, 24); onRead(text, false); }
+function got(text, by) { lastRaw = String(text).slice(0, 24); lastBy = by || ''; onRead(text, false); }
 // Três recortes do quadro, um por vez: moldura (60% da largura), quadro largo (90%) e miolo ampliado (35%).
 // O ZXing só decodifica quando o código ocupa cerca de metade ou mais da largura analisada.
 const PASSES = [{ f:.6, up:1 }, { f:.9, up:1 }, { f:.35, up:2 }];
@@ -300,17 +305,30 @@ function lerZXing(cv) {
   }
   return null;
 }
+const WASM_OPTS = { formats:['Code128','Code39','Code93','ITF','Codabar','EAN-13','QRCode','DataMatrix'], tryHarder:true, tryRotate:false, maxNumberOfSymbols:4 };
+async function lerWasm(cv) {
+  const img = cv.getContext('2d', { willReadFrequently:true }).getImageData(0, 0, cv.width, cv.height);
+  return (await ZXingWASM.readBarcodes(img, WASM_OPTS)).map(r => r.text).filter(Boolean);
+}
 async function tick() {
   const v = $('video');
   if (!stream || !v) return;
   if (v.readyState >= 2 && v.videoWidth) {
     const cv = recorte(v, v.videoWidth, v.videoHeight, PASSES[frames % PASSES.length], canvas);
     frames++;
+    const modo = st.leitor || 'auto';
     let ok = false;
-    if (detector) {
-      try { (await detector.detect(cv)).forEach(b => { ok = true; got(b.rawValue); }); } catch (e) { lastErr = 'nativo: ' + (e.message || e.name); }
+    if (detector && (modo === 'auto' || modo === 'nativo')) {
+      try { (await detector.detect(cv)).forEach(b => { ok = true; got(b.rawValue, 'nativo'); }); } catch (e) { lastErr = 'nativo: ' + (e.message || e.name); }
     }
-    if (!ok && zx) { try { const t = lerZXing(cv); if (t) got(t); } catch (e) { lastErr = 'ZXing: ' + (e.message || e.name); } }
+    // sem o leitor escolhido neste aparelho, cai para o próximo disponível
+    const usaWasm = wasmOk && (modo === 'wasm' || modo === 'auto' || (modo === 'nativo' && !detector));
+    if (!ok && usaWasm) {
+      try { (await lerWasm(cv)).forEach(t => { ok = true; got(t, 'C++'); }); } catch (e) { lastErr = 'C++: ' + (e.message || e.name || e); }
+    }
+    if (!ok && zx && (modo === 'js' || (!usaWasm && !(modo === 'nativo' && detector)))) {
+      try { const t = lerZXing(cv); if (t) got(t, 'JS'); } catch (e) { lastErr = 'JS: ' + (e.message || e.name); }
+    }
     if (frames % 5 === 0) showDiag();
   }
   timer = setTimeout(tick, 60);
@@ -362,8 +380,9 @@ document.addEventListener('click', async e => {
   if (b.id === 'csv') { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([reportCsv()], { type:'text/csv' }));
     a.download = 'inventario-bp2026.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
   if (b.id === 'reset') { if (!resetArmed) { resetArmed = true; b.textContent = 'Toque de novo para confirmar'; setTimeout(() => { resetArmed = false; if (b.isConnected) b.textContent = 'Apagar toda a conferência'; }, 4000); }
-    else { resetArmed = false; st = { found:{}, extras:[] }; save(); go('home'); } }
+    else { resetArmed = false; st = { found:{}, extras:[], leitor: st.leitor }; save(); go('home'); } }
 });
+document.addEventListener('change', e => { if (e.target.id === 'leitor') { st.leitor = e.target.value; save(); lastBy = ''; showDiag(); } });
 document.addEventListener('submit', e => {
   if (e.target.id !== 'manual') return; e.preventDefault();
   const i = $('code'); onRead(i.value, true); i.value = '';
