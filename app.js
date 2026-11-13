@@ -1,5 +1,5 @@
 'use strict';
-const VERSAO = 'v7';
+const VERSAO = 'v8';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -124,9 +124,9 @@ function renderScan() {
   if (done && !bannerShown) { bannerShown = true; buzz([120,80,120,80,300]); }
   if (!done) bannerShown = false;
   const li = it => { const f = st.found[it.c];
-    return `<li class="${f?'found':''}"><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div>
-      ${f ? `<div class="x">✓ achado em ${esc(f.sala)}${f.manual?' (digitado)':''}</div>` : ''}</div>
-      ${f ? `<button data-undo="${it.c}">Desfazer</button>` : ''}</li>`; };
+    return `<li class="${f?'found':''}"${f?'':` data-mark="${it.c}"`}><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div>
+      ${f ? `<div class="x">✓ achado em ${esc(f.sala)}${f.manual?' (marcado à mão)':''}</div>` : ''}</div>
+      ${f ? `<button data-undo="${it.c}">Desfazer</button>` : `<button>Marcar</button>`}</li>`; };
   const tipos = Object.keys(TIPOS).filter(t => alvo.some(i => i.t === t));
   // um selo por tipo: o que falta nesta sala e o que falta nas outras (pode estar aqui, na sala errada)
   const chips = Object.keys(TIPOS).map(t => {
@@ -140,6 +140,7 @@ function renderScan() {
   const achados = ITENS.filter(i => isFound(i) && (i.s === view.sala || st.found[i.c].sala === view.sala));
   const fora = ITENS.filter(i => i.s !== view.sala && !isFound(i));
   const alheias = st.extras.filter(e => e.sala === view.sala);
+  const abertos = [...$('lists').querySelectorAll('details')].map(d => d.open);   // mantém abertas as listas recolhíveis
   $('lists').innerHTML = `
     <h2>Falta encontrar em ${esc(view.sala)} — ${alvo.length - alvo.filter(isFound).length} de ${alvo.length}</h2>
     <div class="chips">${chips}</div>
@@ -149,7 +150,8 @@ function renderScan() {
     <details><summary>Plaquetas lidas aqui que não são suas — ${alheias.length}</summary><ul class="items">${alheias.map(e =>
       `<li><div><span class="plq">${esc(e.code)}</span></div></li>`).join('') || '<li><div>Nenhuma.</div></li>'}</ul></details>
     ${fora.length ? `<details><summary>Cadastrados em outras salas, ainda não achados — ${fora.length}</summary><ul class="items">${fora.map(it =>
-      `<li><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div><div class="x">${TIPOS[it.t][0]} · cadastro: ${esc(it.s)}</div></div></li>`).join('')}</ul></details>` : ''}`;
+      `<li data-mark="${it.c}"><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div><div class="x">${TIPOS[it.t][0]} · cadastro: ${esc(it.s)}</div></div><button>Marcar</button></li>`).join('')}</ul></details>` : ''}`;
+  $('lists').querySelectorAll('details').forEach((d, i) => { if (abertos[i]) d.open = true; });
 }
 
 // ---------- Leitura ----------
@@ -367,6 +369,8 @@ function reportCsv() {
 let resetArmed = false;
 document.addEventListener('click', async e => {
   audioOn();
+  const mk = e.target.closest('[data-mark]');   // toque no item pendente: marca como conferido sem ler a plaqueta
+  if (mk && view.name === 'scan') return onRead(mk.dataset.mark, true);
   const b = e.target.closest('button'); if (!b) return;
   if (b.id === 'back') return go('home');
   if (b.id === 'rep') return go('report');
