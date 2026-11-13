@@ -1,5 +1,5 @@
 'use strict';
-const VERSAO = 'v9';
+const VERSAO = 'v10';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -52,8 +52,8 @@ let st = { found:{}, extras:[], leitor:'auto' };
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.found) st = s; } catch (e) {}
 const LEITORES = { auto:'Automático (nativo, depois ZXing C++)', nativo:'Nativo do Android', wasm:'ZXing C++ (WebAssembly)', js:'ZXing JavaScript' };
 // Bens que já saíram da sua guarda: entram como resolvidos, com a observação que vai para o relatório.
-const BAIXAS = { '6107149': { sala:'NTI', obs:'Entregue ao NTI — informado ao SPS em 02/04/2026; SPS confirmou a transferência no SAP em 16/04/2026' } };
-const aplicarBaixas = () => { for (const c in BAIXAS) if (!st.found[c] || !st.found[c].obs) st.found[c] = { sala: BAIXAS[c].sala, ts: Date.now(), manual: true, obs: BAIXAS[c].obs }; };
+const BAIXAS = { '6107149': { sala:'NTI', obs:'Entregue ao NTI — informado ao SPS em 02/04/2026; SPS confirmou a transferência no SAP em 16/04/2026. A entrega já havia sido comunicada no inventário passado' } };
+const aplicarBaixas = () => { for (const c in BAIXAS) if (!st.found[c] || st.found[c].obs !== BAIXAS[c].obs) st.found[c] = { sala: BAIXAS[c].sala, ts: (st.found[c] && st.found[c].obs && st.found[c].ts) || Date.now(), manual: true, obs: BAIXAS[c].obs }; };
 aplicarBaixas();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
 
