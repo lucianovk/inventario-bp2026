@@ -1,5 +1,5 @@
 'use strict';
-const VERSAO = 'v8';
+const VERSAO = 'v9';
 // ---------- Dados do inventário (PDF BP 2026, 31 itens) ----------
 // [nº, plaqueta (7 dígitos), nº novo, descrição, sala cadastrada, tipo]
 const ITENS = [
@@ -51,6 +51,10 @@ const KEY = 'inventario-bp2026-v1';
 let st = { found:{}, extras:[], leitor:'auto' };
 try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.found) st = s; } catch (e) {}
 const LEITORES = { auto:'Automático (nativo, depois ZXing C++)', nativo:'Nativo do Android', wasm:'ZXing C++ (WebAssembly)', js:'ZXing JavaScript' };
+// Bens que já saíram da sua guarda: entram como resolvidos, com a observação que vai para o relatório.
+const BAIXAS = { '6107149': { sala:'NTI', obs:'Entregue ao NTI — informado ao SPS em 02/04/2026; SPS confirmou a transferência no SAP em 16/04/2026' } };
+const aplicarBaixas = () => { for (const c in BAIXAS) if (!st.found[c] || !st.found[c].obs) st.found[c] = { sala: BAIXAS[c].sala, ts: Date.now(), manual: true, obs: BAIXAS[c].obs }; };
+aplicarBaixas();
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
 
 let view = { name:'home', sala:null, tipo:null };
@@ -99,14 +103,15 @@ function render() {
     $('title').innerHTML = 'Relatório<small>Resultado da conferência</small>';
     const row = it => { const f = st.found[it.c];
       return `<li class="${f?'found':''}"><div><span class="plq">${plq(it.c)}</span> <span class="d">${esc(it.d)}</span>
-        <div class="x">${f ? (f.sala === it.s ? '✓ Na sala cadastrada (' + esc(it.s) + ')' : '✓ Achado em ' + esc(f.sala) + ' — cadastro diz ' + esc(it.s))
+        <div class="x">${f ? f.obs ? '✓ ' + esc(f.obs) + ' — cadastro diz ' + esc(it.s) : (f.sala === it.s ? '✓ Na sala cadastrada (' + esc(it.s) + ')' : '✓ Achado em ' + esc(f.sala) + ' — cadastro diz ' + esc(it.s))
           : 'Não encontrado — cadastro: ' + esc(it.s)}</div></div></li>`; };
     app.innerHTML = `
       <div class="total"><b>${ITENS.filter(isFound).length}</b><span>de ${ITENS.length} bens encontrados</span></div>
       <div class="row"><button class="btn" id="share">Compartilhar</button><button class="btn ghost" id="copy">Copiar texto</button>
         <button class="btn ghost" id="csv">Baixar CSV</button></div>
       <p class="note" id="repmsg"></p>
-      <h2>Na sala errada</h2><ul class="items">${ITENS.filter(i => isFound(i) && st.found[i.c].sala !== i.s).map(row).join('') || '<li><div>Nenhum bem achado fora da sala cadastrada.</div></li>'}</ul>
+      ${ITENS.some(i => isFound(i) && st.found[i.c].obs) ? `<h2>Já entregues a outro setor</h2><ul class="items">${ITENS.filter(i => isFound(i) && st.found[i.c].obs).map(row).join('')}</ul>` : ''}
+      <h2>Na sala errada</h2><ul class="items">${ITENS.filter(i => isFound(i) && !st.found[i.c].obs && st.found[i.c].sala !== i.s).map(row).join('') || '<li><div>Nenhum bem achado fora da sala cadastrada.</div></li>'}</ul>
       <h2>Não encontrados</h2><ul class="items">${ITENS.filter(i => !isFound(i)).map(row).join('') || '<li><div>Nenhum. Todos os bens foram encontrados.</div></li>'}</ul>
       <h2>Encontrados</h2><ul class="items">${ITENS.filter(isFound).map(row).join('') || '<li><div>Nenhum bem lido ainda.</div></li>'}</ul>
       <h2>Plaquetas lidas que não são suas</h2><ul class="items">${st.extras.map(e => `<li><div><span class="plq">${esc(e.code)}</span><div class="x">lida em ${esc(e.sala)}</div></div></li>`).join('') || '<li><div>Nenhuma.</div></li>'}</ul>
@@ -125,8 +130,8 @@ function renderScan() {
   if (!done) bannerShown = false;
   const li = it => { const f = st.found[it.c];
     return `<li class="${f?'found':''}"${f?'':` data-mark="${it.c}"`}><div><span class="plq">${plq(it.c)}</span><div class="d">${esc(it.d)}</div>
-      ${f ? `<div class="x">✓ achado em ${esc(f.sala)}${f.manual?' (marcado à mão)':''}</div>` : ''}</div>
-      ${f ? `<button data-undo="${it.c}">Desfazer</button>` : `<button>Marcar</button>`}</li>`; };
+      ${f ? `<div class="x">✓ ${f.obs ? esc(f.obs) : 'achado em ' + esc(f.sala) + (f.manual?' (marcado à mão)':'')}</div>` : ''}</div>
+      ${f ? (f.obs ? '' : `<button data-undo="${it.c}">Desfazer</button>`) : `<button>Marcar</button>`}</li>`; };
   const tipos = Object.keys(TIPOS).filter(t => alvo.some(i => i.t === t));
   // um selo por tipo: o que falta nesta sala e o que falta nas outras (pode estar aqui, na sala errada)
   const chips = Object.keys(TIPOS).map(t => {
@@ -176,7 +181,7 @@ function onRead(raw, manual) {
     flash = { k:'bad', t:'Não está na sua lista', s:'Plaqueta ' + code };
     buzz([40]); SOM.alheio();
   } else if (isFound(it)) {
-    flash = { k:'warn', t:'Já conferido (é seu): ' + it.d, s: plq(it.c) + ' — achado em ' + st.found[it.c].sala + '. Deve estar com etiqueta.' };
+    flash = { k:'warn', t:'Já conferido (é seu): ' + it.d, s: plq(it.c) + ' — ' + (st.found[it.c].obs || 'achado em ' + st.found[it.c].sala + '. Deve estar com etiqueta.') };
     buzz([40,60,40]); SOM.repetido();
   } else {
     st.found[it.c] = { sala: view.sala, ts: now, manual: !!manual }; save();
@@ -347,20 +352,22 @@ document.addEventListener('visibilitychange', () => {
 function reportText() {
   const f = ITENS.filter(isFound), nf = ITENS.filter(i => !isFound(i));
   const L = ['Inventário BP 2026 — conferência', `Encontrados: ${f.length} de ${ITENS.length}`, '', 'NA SALA ERRADA'];
-  const err = f.filter(i => st.found[i.c].sala !== i.s);
+  const ent = f.filter(i => st.found[i.c].obs);
+  if (ent.length) { L.splice(3, 0, 'JÁ ENTREGUES A OUTRO SETOR', ...ent.map(i => `${i.n}. ${plq(i.c)} ${i.d} — ${st.found[i.c].obs} (cadastro: ${i.s})`), ''); }
+  const err = f.filter(i => !st.found[i.c].obs && st.found[i.c].sala !== i.s);
   err.forEach(i => L.push(`${i.n}. ${plq(i.c)} ${i.d} — achado em ${st.found[i.c].sala}, cadastro diz ${i.s}`));
   if (!err.length) L.push('nenhum');
   L.push('', 'ENCONTRADOS');
-  f.forEach(i => { const s = st.found[i.c].sala; L.push(`${i.n}. ${plq(i.c)} ${i.d} — ${s === i.s ? 'na sala cadastrada ' + i.s : 'achado em ' + s + ' (cadastro: ' + i.s + ')'}`); });
+  f.filter(i => !st.found[i.c].obs).forEach(i => { const s = st.found[i.c].sala; L.push(`${i.n}. ${plq(i.c)} ${i.d} — ${s === i.s ? 'na sala cadastrada ' + i.s : 'achado em ' + s + ' (cadastro: ' + i.s + ')'}`); });
   L.push('', 'NÃO ENCONTRADOS'); nf.forEach(i => L.push(`${i.n}. ${plq(i.c)} ${i.d} — cadastro: ${i.s}`));
   if (st.extras.length) { L.push('', 'PLAQUETAS LIDAS FORA DA LISTA'); st.extras.forEach(e => L.push(`${e.code} — lida em ${e.sala}`)); }
   return L.join('\n');
 }
 function reportCsv() {
   const q = s => '"' + String(s).replace(/"/g, '""') + '"';
-  const rows = [['n','plaqueta','numero_novo','descricao','sala_cadastro','encontrado','sala_encontrado','digitado','quando']];
+  const rows = [['n','plaqueta','numero_novo','descricao','sala_cadastro','encontrado','sala_encontrado','digitado','quando','observacao']];
   ITENS.forEach(i => { const f = st.found[i.c];
-    rows.push([i.n, plq(i.c), i.novo, i.d, i.s, f ? 'sim' : 'nao', f ? f.sala : '', f && f.manual ? 'sim' : '', f ? new Date(f.ts).toISOString() : '']); });
+    rows.push([i.n, plq(i.c), i.novo, i.d, i.s, f ? 'sim' : 'nao', f ? f.sala : '', f && f.manual ? 'sim' : '', f ? new Date(f.ts).toISOString() : '', f && f.obs ? f.obs : '']); });
   st.extras.forEach(e => rows.push(['', e.code, '', 'FORA DA LISTA', '', 'sim', e.sala, '', new Date(e.ts).toISOString()]));
   return '﻿' + rows.map(r => r.map(q).join(';')).join('\r\n');
 }
@@ -384,7 +391,7 @@ document.addEventListener('click', async e => {
   if (b.id === 'csv') { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([reportCsv()], { type:'text/csv' }));
     a.download = 'inventario-bp2026.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
   if (b.id === 'reset') { if (!resetArmed) { resetArmed = true; b.textContent = 'Toque de novo para confirmar'; setTimeout(() => { resetArmed = false; if (b.isConnected) b.textContent = 'Apagar toda a conferência'; }, 4000); }
-    else { resetArmed = false; st = { found:{}, extras:[], leitor: st.leitor }; save(); go('home'); } }
+    else { resetArmed = false; st = { found:{}, extras:[], leitor: st.leitor }; aplicarBaixas(); save(); go('home'); } }
 });
 document.addEventListener('change', e => { if (e.target.id === 'leitor') { st.leitor = e.target.value; save(); lastBy = ''; showDiag(); } });
 document.addEventListener('submit', e => {
